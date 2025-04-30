@@ -5,7 +5,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import LabelEncoder
 from PIL import Image
-import matplotlib.pyplot as plt
+import csv
 
 np.random.seed(42)
 
@@ -28,10 +28,12 @@ class Particle:
             self.v = (self.v / np.linalg.norm(self.v)) * pso.max_vel
 
         self.params = np.add(self.params, self.v)
+        self.params = np.round(self.params).astype(int)
         
         self.params[0] = np.clip(self.params[0], pso.n_estimators_min, pso.n_estimators_max)
         self.params[1] = np.clip(self.params[1], pso.max_depth_min, pso.max_depth_max)
 
+        print(f"starting with n_estimators = {self.params[0]}, max_depth = {self.params[1]}")
         val = pso.Q(self.params)
         if (val < self.best_val):
             self.best_val = val
@@ -40,6 +42,7 @@ class Particle:
         if (val < pso.global_best_val):
             pso.global_best_val = val
             pso.global_best = self.params.copy()
+        print(f"accuracy = {(1.0 - val):.4f}")
         
 class PSO:
     def __init__(self, num_particles, inertia, phi_1, phi_2, max_vel, X_train, y_train, X_test, y_test):
@@ -67,8 +70,8 @@ class PSO:
         self.accuracy_cache = {}
 
         for _ in range(num_particles):
-            params = [np.random.uniform(self.n_estimators_min, self.n_estimators_max + 1),
-                np.random.uniform(self.max_depth_min, self.max_depth_max + 1)]
+            params = [int(np.random.uniform(self.n_estimators_min, self.n_estimators_max + 1)),
+                int(np.random.uniform(self.max_depth_min, self.max_depth_max + 1))]
             best_val = self.Q(params)
             particle = Particle(params, best_val)
             if best_val < self.global_best_val:
@@ -81,7 +84,6 @@ class PSO:
         # hyperparameters to tune: n_estimators, max_depth
         n_estimators = int(round(params[0]))  # Force integer
         max_depth = int(round(params[1])) 
-        print(f"starting with n_estimators = {n_estimators}, max_depth = {max_depth}")
 
         if (n_estimators, max_depth) in self.accuracy_cache:
             accuracy = self.accuracy_cache[(n_estimators, max_depth)]
@@ -93,7 +95,6 @@ class PSO:
             accuracy = accuracy_score(self.y_test, y_pred)
             self.accuracy_cache[(n_estimators, max_depth)] = accuracy
 
-        print(f"accuracy = {accuracy:.4f}")
         return 1.0 - accuracy # Minimize 1-accuracy
     
     def update(self):
@@ -132,7 +133,7 @@ le = LabelEncoder()
 y_train_encoded = le.fit_transform(y_train)
 y_test_encoded = le.transform(y_test)
 
-parser = argparse.ArgumentParser(description="CS 420/CS 527 Lab 4: PSO")
+parser = argparse.ArgumentParser(description="CS 420/CS 527 Final Project: PSO")
 parser.add_argument("--num_particles", default=40, type=int, help="Number of particles")
 parser.add_argument("--inertia", default=0.5, type=float, help="Inertia")
 parser.add_argument("--cognition", default=1, type=float, help="Cognition parameter")
@@ -144,6 +145,20 @@ d = vars(args)
 for k in d.keys():
     print(k + str(":") + str(d[k]))
 
+# Prepare CSV logging
+csv_file = open(f"pso_accuracies.csv", "w", newline="")
+csv_writer = csv.writer(csv_file)
+csv_writer.writerow([
+    "Epoch", 
+    "Best_Accuracy", 
+    "Average_Accuracy", 
+    "Best_n_estimators", 
+    "Best_max_depth", 
+    "Avg_n_estimators", 
+    "Avg_max_depth", 
+    "Error" 
+])
+
 # Create PSO
 pso = PSO(args.num_particles, args.inertia, args.cognition, args.social, max_vel=5, X_train=X_train, y_train=y_train_encoded, X_test=X_test, y_test=y_test_encoded)
 
@@ -152,13 +167,41 @@ for i in range(50):
     pso.update()
     x,y = pso.scatter_plot()
 
+    accuracies = []
+    param_list = []
+
+    for p in pso.particles:
+        acc = 1.0 - pso.Q(p.params)
+        accuracies.append(acc)
+        param_list.append(p.params)
+
+    best_accuracy = max(accuracies)
+    avg_accuracy = np.mean(accuracies)
+
+    best_params = pso.global_best
+    avg_params = np.mean(param_list, axis=0)
+
     error = np.mean([np.linalg.norm(p.params - pso.global_best) for p in pso.particles])
+    print(f"Epoch {i}: Best accuracy = {1.0 - pso.global_best_val:.4f}, Error = {error:.6f}")
+
+    csv_writer.writerow([
+        i,
+        f"{best_accuracy:.4f}",
+        f"{avg_accuracy:.4f}",
+        int(round(best_params[0])),
+        int(round(best_params[1])),
+        f"{avg_params[0]:.2f}",
+        f"{avg_params[1]:.2f}", 
+        f"{error:.6f}"
+    ])
 
     if error < 8.0:
-        print(f"Epoch {i}: Best accuracy = {1.0 - pso.global_best_val:.4f}, Error = {error:.6f}")
         break
-
+    
 print("epoch_stop:", i)
 print("solution_found (n_estimators, max_depth):", np.round(pso.global_best).astype(int))
 print("fitness (1-accuracy):", pso.global_best_val)
 print("accuracy:", 1.0 - pso.global_best_val)
+print("number of items in cache:", len(pso.accuracy_cache))
+
+csv_file.close()
